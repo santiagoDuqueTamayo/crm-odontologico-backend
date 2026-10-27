@@ -1,0 +1,126 @@
+{
+  "info": {
+    "_postman_id": "d8f9e412-5a77-4b88-9c31-1029384756ab",
+    "name": "CRM Odontológico - Kassar Backend (Ollama Voice Dictation)",
+    "description": "Colección de pruebas para el procesamiento de dictado por voz de Odontograma conectado a Ollama con validación clínica FDI y bucle de autocorrección.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1. Procesar Dictado (Formato envuelto en prompt - Diente 15)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"prompt\": \"{\\\"odontogramaId\\\": \\\"a1b2c3d4-5678\\\", \\\"textoCapturado\\\": \\\"diente 15 distal y vestibular sano, oclusal caries, el resto sano.\\\"}\"\n}"
+        },
+        "url": {
+          "raw": "http://localhost:8080/api/v1/odontogramas/voice-capture",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "8080",
+          "path": [
+            "api",
+            "v1",
+            "odontogramas",
+            "voice-capture"
+          ]
+        }
+      }
+    },
+    {
+      "name": "2. Procesar Dictado (Formato VoiceCaptureRequest directo - Diente Anterior 11 Incisal)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"odontogramaId\": \"odo-front-001\",\n  \"textoCapturado\": \"incisivo central superior derecho borde incisal fracturado, vestibular resina, el resto sano\"\n}"
+        },
+        "url": {
+          "raw": "http://localhost:8080/api/v1/odontogramas/voice-capture",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "8080",
+          "path": [
+            "api",
+            "v1",
+            "odontogramas",
+            "voice-capture"
+          ]
+        }
+      }
+    },
+    {
+      "name": "3. Procesar Dictado (Múltiples Dientes - Arcada Inferior Lingual y Ausente)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"odontogramaId\": \"odo-front-002\",\n  \"textoCapturado\": \"diente 36 oclusal caries y lingual sellante, el resto sano. Diente 48 ausente.\"\n}"
+        },
+        "url": {
+          "raw": "http://localhost:8080/api/v1/odontogramas/voice-capture",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "8080",
+          "path": [
+            "api",
+            "v1",
+            "odontogramas",
+            "voice-capture"
+          ]
+        }
+      }
+    },
+    {
+      "name": "4. Consultar Catálogo Oficial FDI (32 Dientes)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "http://localhost:8080/api/v1/odontogramas/catalogo-fdi",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "8080",
+          "path": [
+            "api",
+            "v1",
+            "odontogramas",
+            "catalogo-fdi"
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -54,17 +54,25 @@ public enum EstadoClinico {
     }
 
     /**
-     * Busca un EstadoClinico de manera insensible a mayúsculas, minúsculas y tildes.
+     * Busca un EstadoClinico de manera insensible a mayúsculas, minúsculas y tildes,
+     * soportando además sinónimos clínicos habituales del modelo local (ej. Resina/Amalgama -> Restaurado,
+     * Extraccion -> Extraído).
      */
     public static Optional<EstadoClinico> fromTexto(String valor) {
         if (valor == null || valor.isBlank()) {
             return Optional.empty();
         }
         String normalizado = normalizar(valor);
-        return Arrays.stream(values())
-                .filter(estado -> normalizar(estado.etiqueta).equals(normalizado)
-                        || normalizar(estado.name()).equals(normalizado))
-                .findFirst();
+
+        return switch (normalizado) {
+            case "resina", "amalgama", "obturado", "obturacion" -> Optional.of(RESTAURADO);
+            case "extraccion", "extraido", "exodoncia" -> Optional.of(EXTRAIDO);
+            case "fractura" -> Optional.of(FRACTURADO);
+            default -> Arrays.stream(values())
+                    .filter(estado -> normalizar(estado.etiqueta).equals(normalizado)
+                            || normalizar(estado.name()).equals(normalizado))
+                    .findFirst();
+        };
     }
 
     public static String valoresPermitidosComoTexto() {

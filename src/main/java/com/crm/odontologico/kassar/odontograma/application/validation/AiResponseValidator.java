@@ -95,6 +95,11 @@ public class AiResponseValidator {
             return List.of(dienteUnicoNode);
         }
 
+        // Soporte tolerante si el modelo (ej. odontograma-llama) devuelve el diente directamente en la raíz
+        if (root.has("numero") || root.has("numeroDiente")) {
+            return List.of(root);
+        }
+
         errores.add("El JSON debe contener el arreglo 'dientes' con los objetos de cada diente mencionado.");
         return List.of();
     }
@@ -113,6 +118,9 @@ public class AiResponseValidator {
         }
 
         JsonNode numeroNode = dienteNode.get("numero");
+        if (numeroNode == null || numeroNode.isNull()) {
+            numeroNode = dienteNode.get("numeroDiente");
+        }
         if (numeroNode == null || !numeroNode.canConvertToInt()) {
             errores.add(prefijo + ".numero es obligatorio y debe ser un número entero FDI (ej. 15, 21, 36).");
             return;
@@ -160,17 +168,17 @@ public class AiResponseValidator {
 
         validarLlavesAnatomicas(carasNode, metadata, errores);
 
-        EstadoClinico mesial = extraerEstadoCara(carasNode, "mesial", null, metadata, "Mesial", errores);
-        EstadoClinico distal = extraerEstadoCara(carasNode, "distal", null, metadata, "Distal", errores);
-        EstadoClinico vestibular = extraerEstadoCara(carasNode, "vestibular", null, metadata, "Vestibular", errores);
+        EstadoClinico mesial = extraerEstadoCara(carasNode, "mesial", null, metadata, "Mesial", estadoGeneral, errores);
+        EstadoClinico distal = extraerEstadoCara(carasNode, "distal", null, metadata, "Distal", estadoGeneral, errores);
+        EstadoClinico vestibular = extraerEstadoCara(carasNode, "vestibular", null, metadata, "Vestibular", estadoGeneral, errores);
 
         String aliasInterna = metadata.arcada() == ArcadaDental.SUPERIOR ? "palatino" : "lingual";
         EstadoClinico palatinoLingual = extraerEstadoCara(
-                carasNode, "palatino_lingual", aliasInterna, metadata, metadata.etiquetaCaraInterna(), errores);
+                carasNode, "palatino_lingual", aliasInterna, metadata, metadata.etiquetaCaraInterna(), estadoGeneral, errores);
 
         String aliasMasticatoria = metadata.grupo() == GrupoDental.ANTERIOR ? "incisal" : "oclusal";
         EstadoClinico oclusalIncisal = extraerEstadoCara(
-                carasNode, "oclusal_incisal", aliasMasticatoria, metadata, metadata.etiquetaCaraMasticatoria(), errores);
+                carasNode, "oclusal_incisal", aliasMasticatoria, metadata, metadata.etiquetaCaraMasticatoria(), estadoGeneral, errores);
 
         if (errores.size() == erroresAntesDelDiente && estadoGeneral != null) {
             validarCoherenciaClinica(
@@ -251,6 +259,7 @@ public class AiResponseValidator {
             String propiedadAlias,
             DienteFdiMetadata metadata,
             String etiquetaAnatomicaEsperada,
+            EstadoClinico estadoGeneral,
             List<String> errores
     ) {
         JsonNode caraNode = carasNode.get(propiedadPrincipal);
@@ -260,6 +269,9 @@ public class AiResponseValidator {
 
         int numero = metadata.numero();
         if (caraNode == null || caraNode.isNull()) {
+            if (estadoGeneral != null && estadoGeneral.isInhabilitaCarasIndividuales()) {
+                return estadoGeneral;
+            }
             errores.add("Diente " + numero + ": falta especificar el estado de la cara '"
                     + propiedadPrincipal + "' (" + etiquetaAnatomicaEsperada + ").");
             return null;
