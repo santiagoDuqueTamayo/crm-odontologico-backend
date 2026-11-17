@@ -368,6 +368,47 @@ class ProcessVoiceDictationServiceTest {
         assertEquals("#84CC16", porNumero.get(38).estadoGeneral().colorHex());
     }
 
+    @Test
+    @DisplayName("Debe mantener las 5 caras en Sano cuando el diente tiene una lesión exclusiva de la raíz (ej. Fractura Radicular, Lesión Periapical)")
+    void debeMantenerCarasEnSanoCuandoEsLesionExclusivaDeRaiz() {
+        OdontogramaAiPort aiPort = messages -> """
+                {
+                  "dientes": [
+                    { "numero": 21, "estadoGeneral": "Fractura Radicular" },
+                    { "numero": 22, "estadoGeneral": "Lesión Periapical" },
+                    { "numero": 23, "estadoGeneral": "Apicectomía" },
+                    { "numero": 36, "estadoGeneral": "Lesión de Furca" },
+                    { "numero": 46, "estadoGeneral": "Reabsorción Radicular" },
+                    { "numero": 18, "estadoGeneral": "Anomalía Radicular" }
+                  ]
+                }
+                """;
+
+        ProcessVoiceDictationService service = new ProcessVoiceDictationService(
+                aiPort, promptBuilder, validator, mapper, objectMapper, 3
+        );
+
+        OdontogramaUpdateResponse response = service.procesarDictado(
+                new VoiceCaptureRequest("odo-raiz", "dictado con lesiones radiculares")
+        );
+
+        Map<Integer, DienteData> porNumero = indexarPorNumero(response);
+
+        DienteData d21 = porNumero.get(21);
+        assertEquals(EstadoClinico.FRACTURA_RADICULAR, d21.estadoGeneral().estado());
+        assertEquals("#B91C1C", d21.estadoGeneral().colorHex());
+        assertEquals(EstadoClinico.SANO, d21.caras().mesial().estado());
+        assertEquals(EstadoClinico.SANO, d21.caras().oclusalIncisal().estado());
+
+        assertEquals(EstadoClinico.LESION_PERIAPICAL, porNumero.get(22).estadoGeneral().estado());
+        assertEquals(EstadoClinico.SANO, porNumero.get(22).caras().vestibular().estado());
+
+        assertEquals(EstadoClinico.APICECTOMIA, porNumero.get(23).estadoGeneral().estado());
+        assertEquals(EstadoClinico.LESION_FURCA, porNumero.get(36).estadoGeneral().estado());
+        assertEquals(EstadoClinico.REABSORCION_RADICULAR, porNumero.get(46).estadoGeneral().estado());
+        assertEquals(EstadoClinico.ANOMALIA_RADICULAR, porNumero.get(18).estadoGeneral().estado());
+    }
+
     private Map<Integer, DienteData> indexarPorNumero(OdontogramaUpdateResponse response) {
         return response.dientes().stream()
                 .collect(Collectors.toMap(DienteData::numero, Function.identity()));

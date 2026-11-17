@@ -250,7 +250,9 @@ public class AiResponseValidator {
     ) {
         JsonNode caraNode = buscarPrimerNodoPresente(carasNode, llavesAceptadas);
         if (caraNode == null || caraNode.isNull()) {
-            return (estadoGeneral != null && estadoGeneral.isInhabilitaCarasIndividuales())
+            return (estadoGeneral != null
+                    && estadoGeneral.isInhabilitaCarasIndividuales()
+                    && !estadoGeneral.isExclusivoDeRaiz())
                     ? estadoGeneral
                     : EstadoClinico.SANO;
         }
@@ -318,7 +320,7 @@ public class AiResponseValidator {
     }
 
     private EstadoClinico normalizarCaraConEstadoGeneral(EstadoClinico estadoCara, EstadoClinico estadoGeneral) {
-        if (estadoGeneral.isInhabilitaCarasIndividuales()) {
+        if (estadoGeneral.isInhabilitaCarasIndividuales() && !estadoGeneral.isExclusivoDeRaiz()) {
             return estadoGeneral;
         }
         return (estadoCara == EstadoClinico.PRESENTE) ? EstadoClinico.SANO : estadoCara;

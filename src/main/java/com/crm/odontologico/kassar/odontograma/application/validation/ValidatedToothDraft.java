@@ -34,10 +34,12 @@ public record ValidatedToothDraft(
     }
 
     /**
-     * Crea un borrador cuando un estado aplica al diente completo (ej. Ausente, Extraído, Retenido, Implante, Sano).
+     * Crea un borrador cuando el LLM reporta un estado general sin detallar caras.
+     * Si el estado es exclusivo de la raíz (ej. Fractura Radicular, Lesión Periapical),
+     * las 5 caras coronales permanecen en {@link EstadoClinico#SANO}.
      */
     public static ValidatedToothDraft conEstadoCompleto(DienteFdiMetadata metadata, EstadoClinico estadoGeneral) {
-        EstadoClinico estadoCaras = (estadoGeneral == EstadoClinico.PRESENTE)
+        EstadoClinico estadoCaras = (estadoGeneral == EstadoClinico.PRESENTE || estadoGeneral.isExclusivoDeRaiz())
                 ? EstadoClinico.SANO
                 : estadoGeneral;
         return new ValidatedToothDraft(
