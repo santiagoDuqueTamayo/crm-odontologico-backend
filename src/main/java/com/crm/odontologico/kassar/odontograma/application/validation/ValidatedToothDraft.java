@@ -5,7 +5,7 @@ import com.crm.odontologico.kassar.odontograma.domain.model.EstadoClinico;
 
 /**
  * Representación intermedia ya validada clínica y anatómicamente de un diente
- * extraído desde la respuesta del modelo de IA.
+ * extraído desde la respuesta parcial del modelo de IA o generado por defecto.
  */
 public record ValidatedToothDraft(
         DienteFdiMetadata metadata,
@@ -16,4 +16,38 @@ public record ValidatedToothDraft(
         EstadoClinico palatinoLingual,
         EstadoClinico oclusalIncisal
 ) {
+
+    /**
+     * Crea un borrador con los estados por defecto ("Presente" a nivel general
+     * y "Sano" en sus 5 superficies) para los dientes que el LLM no reportó.
+     */
+    public static ValidatedToothDraft porDefecto(DienteFdiMetadata metadata) {
+        return new ValidatedToothDraft(
+                metadata,
+                EstadoClinico.PRESENTE,
+                EstadoClinico.SANO,
+                EstadoClinico.SANO,
+                EstadoClinico.SANO,
+                EstadoClinico.SANO,
+                EstadoClinico.SANO
+        );
+    }
+
+    /**
+     * Crea un borrador cuando un estado aplica al diente completo (ej. Ausente, Extraído, Retenido, Implante, Sano).
+     */
+    public static ValidatedToothDraft conEstadoCompleto(DienteFdiMetadata metadata, EstadoClinico estadoGeneral) {
+        EstadoClinico estadoCaras = (estadoGeneral == EstadoClinico.PRESENTE)
+                ? EstadoClinico.SANO
+                : estadoGeneral;
+        return new ValidatedToothDraft(
+                metadata,
+                estadoGeneral,
+                estadoCaras,
+                estadoCaras,
+                estadoCaras,
+                estadoCaras,
+                estadoCaras
+        );
+    }
 }
