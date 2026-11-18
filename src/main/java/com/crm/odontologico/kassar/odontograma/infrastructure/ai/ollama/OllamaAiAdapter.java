@@ -3,6 +3,7 @@ package com.crm.odontologico.kassar.odontograma.infrastructure.ai.ollama;
 import com.crm.odontologico.kassar.odontograma.application.port.AiChatMessage;
 import com.crm.odontologico.kassar.odontograma.application.port.OdontogramaAiPort;
 import com.crm.odontologico.kassar.odontograma.domain.exception.AiProviderCommunicationException;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -10,6 +11,9 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.util.List;
 import java.util.Map;
@@ -29,10 +33,17 @@ public class OllamaAiAdapter implements OdontogramaAiPort {
 
     private final RestClient ollamaRestClient;
     private final OllamaProperties properties;
+    private final ObjectMapper objectMapper;
 
-    public OllamaAiAdapter(RestClient ollamaRestClient, OllamaProperties properties) {
+    @Autowired
+    public OllamaAiAdapter(RestClient ollamaRestClient, OllamaProperties properties, ObjectMapper objectMapper) {
         this.ollamaRestClient = ollamaRestClient;
         this.properties = properties;
+        this.objectMapper = objectMapper;
+    }
+
+    public OllamaAiAdapter(RestClient ollamaRestClient, OllamaProperties properties) {
+        this(ollamaRestClient, properties, JsonMapper.builder().build());
     }
 
     @Override
@@ -53,17 +64,19 @@ public class OllamaAiAdapter implements OdontogramaAiPort {
             log.debug("Enviando petición a Ollama ({}{}) con modelo '{}' y {} mensaje(s) en el historial",
                     properties.baseUrl(), properties.chatEndpoint(), properties.model(), ollamaMessages.size());
 
-            OllamaChatResponse response = ollamaRestClient.post()
+            String rawBody = ollamaRestClient.post()
                     .uri(properties.chatEndpoint())
                     .contentType(MediaType.APPLICATION_JSON)
                     .accept(MediaType.APPLICATION_JSON)
                     .body(requestPayload)
                     .retrieve()
-                    .body(OllamaChatResponse.class);
+                    .body(String.class);
 
-            if (response == null) {
-                throw new AiProviderCommunicationException("El servidor Ollama devolvió una respuesta nula.");
+            if (rawBody == null || rawBody.isBlank()) {
+                throw new AiProviderCommunicationException("El servidor Ollama devolvió una respuesta vacía.");
             }
+
+            OllamaChatResponse response = objectMapper.readValue(rawBody, OllamaChatResponse.class);
 
             if (response.message() != null && response.message().content() != null) {
                 return response.message().content();
@@ -76,7 +89,18 @@ public class OllamaAiAdapter implements OdontogramaAiPort {
 
             throw new AiProviderCommunicationException(
                     "La respuesta de Ollama no contiene el campo 'message.content' ni 'response'.");
+        } catch (AiProviderCommunicationException ex) {
+            log.error("Falló la llamada a Ollama (modelo '{}').", properties.model(), ex);
+            throw ex;
+        } catch (JacksonException ex) {
+            log.error("Ollama devolvió una respuesta JSON inválida (modelo '{}').", properties.model(), ex);
+            throw new AiProviderCommunicationException(
+                    "Respuesta JSON inválida desde el servidor Ollama en " + properties.baseUrl()
+                            + properties.chatEndpoint() + " (modelo: " + properties.model() + "): " + ex.getOriginalMessage(),
+                    ex
+            );
         } catch (RestClientException ex) {
+            log.error("Error comunicándose con Ollama (modelo '{}').", properties.model(), ex);
             throw new AiProviderCommunicationException(
                     "Error al comunicarse con el servidor de IA Ollama en " + properties.baseUrl()
                             + properties.chatEndpoint() + " (modelo: " + properties.model() + "): " + ex.getMessage(),

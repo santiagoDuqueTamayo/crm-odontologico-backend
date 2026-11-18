@@ -7,15 +7,17 @@ import org.springframework.boot.test.context.SpringBootTest;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
-@SpringBootTest(properties = "spring.ai.google.genai.api-key=test-api-key")
+@SpringBootTest(properties = {
+        "odontograma.ai.provider=google-genai",
+        "spring.ai.google.genai.api-key=test-api-key"
+})
 class KassarApplicationTests {
 
-	@Autowired
-	private ChatModel chatModel;
+    @Autowired
+    private ChatModel chatModel;
 
-	@Test
-	void contextLoads() {
-		assertNotNull(chatModel);
-	}
-
+    @Test
+    void contextLoads() {
+        assertNotNull(chatModel);
+    }
 }

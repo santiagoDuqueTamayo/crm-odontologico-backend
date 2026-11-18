@@ -20,7 +20,10 @@ import tools.jackson.databind.json.JsonMapper;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -44,20 +47,20 @@ class ProcessVoiceDictationServiceTest {
     }
 
     @Test
-    @DisplayName("Debe procesar el formato envuelto en 'prompt' para el diente 15 y enriquecer anatomía FDI y colores")
-    void debeProcesarPeticionEnvueltaEnPromptParaDiente15() {
+    @DisplayName("Debe consolidar el JSON parcial del LLM (1 diente) con los 32 dientes FDI, asignar estados por defecto e inyectar metadatos de UI")
+    void debeConsolidarJsonParcialConLos32DientesEInyectarMetadatosUi() {
         OdontogramaAiPort fakeAiPort = messages -> """
                 {
                   "dientes": [
                     {
                       "numero": 15,
-                      "estadoGeneral": { "estado": "Presente" },
+                      "estadoGeneral": "Presente",
                       "caras": {
-                        "mesial": { "estado": "Sano" },
-                        "distal": { "estado": "Sano" },
-                        "vestibular": { "estado": "Sano" },
-                        "palatino_lingual": { "estado": "Sano" },
-                        "oclusal_incisal": { "estado": "Caries" }
+                        "mesial": "Sano",
+                        "distal": "Sano",
+                        "vestibular": "Sano",
+                        "palatino_lingual": "Sano",
+                        "oclusal_incisal": "Caries"
                       }
                     }
                   ]
@@ -71,23 +74,25 @@ class ProcessVoiceDictationServiceTest {
         VoiceCaptureRequest request = new VoiceCaptureRequest(
                 null,
                 null,
-                "{\"odontogramaId\": \"a1b2c3d4-5678\", \"textoCapturado\": \"diente 15 distal y vestibular sano, oclusal caries, el resto sano.\"}"
+                "{\"odontogramaId\": \"a1b2c3d4-5678\", \"textoCapturado\": \"  diente 15   oclusal caries  \"}"
         );
 
         OdontogramaUpdateResponse response = service.procesarDictado(request);
 
         assertEquals("a1b2c3d4-5678", response.odontogramaId());
-        assertEquals(1, response.dientes().size());
+        assertEquals(32, response.dientes().size());
 
-        DienteData diente15 = response.dientes().get(0);
-        assertEquals(15, diente15.numero());
+        Map<Integer, DienteData> porNumero = indexarPorNumero(response);
+
+        // Diente 15 reportado por el LLM con metadatos UI enriquecidos
+        DienteData diente15 = porNumero.get(15);
+        assertNotNull(diente15);
         assertEquals("Segundo premolar superior derecho", diente15.nombreColoquial());
         assertEquals(1, diente15.cuadrante());
         assertEquals(GrupoDental.POSTERIOR, diente15.grupoDental());
         assertEquals(EstadoClinico.PRESENTE, diente15.estadoGeneral().estado());
         assertNull(diente15.estadoGeneral().colorHex());
 
-        // Verifica etiquetas anatómicas exactas para superior posterior (Palatino + Oclusal)
         assertEquals("Palatino", diente15.caras().palatinoLingual().etiquetaVisual());
         assertEquals(EstadoClinico.SANO, diente15.caras().palatinoLingual().estado());
         assertEquals("#22C55E", diente15.caras().palatinoLingual().colorHex());
@@ -95,10 +100,77 @@ class ProcessVoiceDictationServiceTest {
         assertEquals("Oclusal", diente15.caras().oclusalIncisal().etiquetaVisual());
         assertEquals(EstadoClinico.CARIES, diente15.caras().oclusalIncisal().estado());
         assertEquals("#EF4444", diente15.caras().oclusalIncisal().colorHex());
+
+        // Dientes no reportados por el LLM deben tener estado por defecto (Presente / caras Sano)
+        DienteData diente21NoReportado = porNumero.get(21);
+        assertNotNull(diente21NoReportado);
+        assertEquals("Incisivo central superior izquierdo", diente21NoReportado.nombreColoquial());
+        assertEquals(GrupoDental.ANTERIOR, diente21NoReportado.grupoDental());
+        assertEquals(EstadoClinico.PRESENTE, diente21NoReportado.estadoGeneral().estado());
+        assertEquals(EstadoClinico.SANO, diente21NoReportado.caras().oclusalIncisal().estado());
+        assertEquals("Incisal", diente21NoReportado.caras().oclusalIncisal().etiquetaVisual());
+        assertEquals("Palatino", diente21NoReportado.caras().palatinoLingual().etiquetaVisual());
     }
 
     @Test
-    @DisplayName("Debe distinguir Lingual e Incisal en dientes anteriores inferiores y soportar múltiples dientes")
+    @DisplayName("Debe autocorregir errores anatómicos del LLM (ej. cara 'oclusal' en diente anterior 11 a 'Incisal') sin reintentar")
+    void debeAutocorregirCaraOclusalEnDienteAnteriorSinReintentar() {
+        AtomicInteger contadorLlamadas = new AtomicInteger(0);
+
+        OdontogramaAiPort aiPortConErrorAnatomico = messages -> {
+            contadorLlamadas.incrementAndGet();
+            // El LLM devuelve "oclusal" y "lingual" para el diente 11 (Anterior Superior)
+            return """
+                    {
+                      "dientes": [
+                        {
+                          "numero": 11,
+                          "caras": {
+                            "oclusal": "Fracturado",
+                            "lingual": "Caries"
+                          }
+                        }
+                      ]
+                    }
+                    """;
+        };
+
+        ProcessVoiceDictationService service = new ProcessVoiceDictationService(
+                aiPortConErrorAnatomico, promptBuilder, validator, mapper, objectMapper, 3
+        );
+
+        OdontogramaUpdateResponse response = service.procesarDictado(
+                new VoiceCaptureRequest("odo-11", "diente 11 fracturado en borde y caries interna")
+        );
+
+        // No debe obligar al LLM a reintentar: se procesa en 1 sola llamada
+        assertEquals(1, contadorLlamadas.get());
+        assertEquals(32, response.dientes().size());
+
+        Map<Integer, DienteData> porNumero = indexarPorNumero(response);
+        DienteData diente11 = porNumero.get(11);
+
+        assertEquals("Incisivo central superior derecho", diente11.nombreColoquial());
+        assertEquals(GrupoDental.ANTERIOR, diente11.grupoDental());
+        assertEquals(EstadoClinico.PRESENTE, diente11.estadoGeneral().estado());
+
+        // "oclusal" fue mapeado automáticamente a "Incisal" y "lingual" a "Palatino"
+        assertEquals("Incisal", diente11.caras().oclusalIncisal().etiquetaVisual());
+        assertEquals(EstadoClinico.FRACTURADO, diente11.caras().oclusalIncisal().estado());
+        assertEquals("#F97316", diente11.caras().oclusalIncisal().colorHex());
+
+        assertEquals("Palatino", diente11.caras().palatinoLingual().etiquetaVisual());
+        assertEquals(EstadoClinico.CARIES, diente11.caras().palatinoLingual().estado());
+        assertEquals("#EF4444", diente11.caras().palatinoLingual().colorHex());
+
+        // Caras no mencionadas en el diente 11 toman "Sano" por defecto
+        assertEquals(EstadoClinico.SANO, diente11.caras().mesial().estado());
+        assertEquals(EstadoClinico.SANO, diente11.caras().distal().estado());
+        assertEquals(EstadoClinico.SANO, diente11.caras().vestibular().estado());
+    }
+
+    @Test
+    @DisplayName("Debe distinguir Lingual e Incisal en dientes anteriores inferiores y soportar estados de diente completo")
     void debeSoportarMultiplesDientesConAnatomiaFdiExacta() {
         OdontogramaAiPort fakeAiPort = messages -> """
                 {
@@ -133,26 +205,27 @@ class ProcessVoiceDictationServiceTest {
 
         OdontogramaUpdateResponse response = service.procesarDictado(request);
 
-        assertEquals(2, response.dientes().size());
+        assertEquals(32, response.dientes().size());
+        Map<Integer, DienteData> porNumero = indexarPorNumero(response);
 
-        DienteData diente31 = response.dientes().get(0);
-        assertEquals(31, diente31.numero());
+        DienteData diente31 = porNumero.get(31);
         assertEquals("Incisivo central inferior izquierdo", diente31.nombreColoquial());
         assertEquals(GrupoDental.ANTERIOR, diente31.grupoDental());
         assertEquals("Lingual", diente31.caras().palatinoLingual().etiquetaVisual());
         assertEquals("Incisal", diente31.caras().oclusalIncisal().etiquetaVisual());
         assertEquals(EstadoClinico.FRACTURADO, diente31.caras().oclusalIncisal().estado());
+        assertEquals(EstadoClinico.RESTAURADO, diente31.caras().vestibular().estado());
 
-        DienteData diente46 = response.dientes().get(1);
-        assertEquals(46, diente46.numero());
+        DienteData diente46 = porNumero.get(46);
         assertEquals("Primer molar inferior derecho", diente46.nombreColoquial());
         assertEquals(EstadoClinico.AUSENTE, diente46.estadoGeneral().estado());
+        assertEquals("#6B7280", diente46.estadoGeneral().colorHex());
         assertEquals(EstadoClinico.AUSENTE, diente46.caras().oclusalIncisal().estado());
     }
 
     @Test
-    @DisplayName("Debe enviar feedback de error al modelo de IA y autocorregirse cuando el primer intento tiene errores anatómicos o FDI")
-    void debeAutocorregirRespuestaCuandoElPrimerIntentoFallaValidacion() {
+    @DisplayName("Debe reintentar con feedback al LLM cuando devuelve un número FDI inexistente y consolidar los 32 dientes tras corregirse")
+    void debeReintentarCuandoElLlmDevuelveNumeroFdiInvalido() {
         AtomicInteger contadorLlamadas = new AtomicInteger(0);
         List<List<AiChatMessage>> historialesRecibidos = new ArrayList<>();
 
@@ -160,7 +233,6 @@ class ProcessVoiceDictationServiceTest {
             historialesRecibidos.add(List.copyOf(messages));
             int intento = contadorLlamadas.incrementAndGet();
             if (intento == 1) {
-                // Intento 1 con error: usa etiqueta 'Oclusal' en un diente anterior (11) y un diente FDI inválido (19)
                 return """
                         {
                           "dientes": [
@@ -168,41 +240,21 @@ class ProcessVoiceDictationServiceTest {
                               "numero": 19,
                               "estadoGeneral": "Presente",
                               "caras": {
-                                "mesial": "Sano",
-                                "distal": "Sano",
-                                "vestibular": "Sano",
-                                "palatino_lingual": "Sano",
-                                "oclusal_incisal": "Caries"
-                              }
-                            },
-                            {
-                              "numero": 11,
-                              "estadoGeneral": "Presente",
-                              "caras": {
-                                "mesial": { "etiquetaVisual": "Mesial", "estado": "Sano" },
-                                "distal": { "etiquetaVisual": "Distal", "estado": "Sano" },
-                                "vestibular": { "etiquetaVisual": "Vestibular", "estado": "Sano" },
-                                "palatino_lingual": { "etiquetaVisual": "Palatino", "estado": "Sano" },
-                                "oclusal_incisal": { "etiquetaVisual": "Oclusal", "estado": "Fracturado" }
+                                "oclusal": "Caries"
                               }
                             }
                           ]
                         }
                         """;
             }
-            // Intento 2: el modelo corrige su salida tras recibir el mensaje de validación del backend
             return """
                     {
                       "dientes": [
                         {
-                          "numero": 11,
-                          "estadoGeneral": { "estado": "Presente" },
+                          "numero": 18,
+                          "estadoGeneral": "Presente",
                           "caras": {
-                            "mesial": { "etiquetaVisual": "Mesial", "estado": "Sano" },
-                            "distal": { "etiquetaVisual": "Distal", "estado": "Sano" },
-                            "vestibular": { "etiquetaVisual": "Vestibular", "estado": "Sano" },
-                            "palatino_lingual": { "etiquetaVisual": "Palatino", "estado": "Sano" },
-                            "oclusal_incisal": { "etiquetaVisual": "Incisal", "estado": "Fracturado" }
+                            "oclusal_incisal": "Caries"
                           }
                         }
                       ]
@@ -215,24 +267,22 @@ class ProcessVoiceDictationServiceTest {
         );
 
         OdontogramaUpdateResponse response = service.procesarDictado(
-                new VoiceCaptureRequest("odo-11", "incisivo central superior derecho incisal fracturado, resto sano")
+                new VoiceCaptureRequest("odo-18", "cordal superior derecha con caries oclusal")
         );
 
         assertEquals(2, contadorLlamadas.get());
-        assertEquals(1, response.dientes().size());
-        assertEquals(11, response.dientes().get(0).numero());
-        assertEquals("Incisal", response.dientes().get(0).caras().oclusalIncisal().etiquetaVisual());
+        assertEquals(32, response.dientes().size());
 
-        // Verifica que en el segundo llamado se haya enviado el feedback con los errores detectados
+        Map<Integer, DienteData> porNumero = indexarPorNumero(response);
+        assertEquals(EstadoClinico.CARIES, porNumero.get(18).caras().oclusalIncisal().estado());
+
         List<AiChatMessage> segundoHistorial = historialesRecibidos.get(1);
         assertEquals(4, segundoHistorial.size());
-        String feedbackMessage = segundoHistorial.get(3).content();
-        assertTrue(feedbackMessage.contains("19"));
-        assertTrue(feedbackMessage.contains("Incisal"));
+        assertTrue(segundoHistorial.get(3).content().contains("19"));
     }
 
     @Test
-    @DisplayName("Debe lanzar AiValidationExhaustedException si el modelo no corrige sus errores tras agotar los intentos")
+    @DisplayName("Debe lanzar AiValidationExhaustedException si el modelo no corrige errores estructurales o FDI tras agotar intentos")
     void debeLanzarExcepcionCuandoSeAgotanLosIntentosDeCorreccion() {
         OdontogramaAiPort brokenAiPort = messages -> "{ \"dientes\": [ { \"numero\": 99 } ] }";
 
@@ -251,115 +301,116 @@ class ProcessVoiceDictationServiceTest {
     }
 
     @Test
-    @DisplayName("Debe extraer y reconciliar los 9 dientes cuando el dictado incluye grupos, sintaxis invertida y el modelo trunca la salida")
-    void debeReconciliarLos9DientesEnDictadoComplejoMultiPieza() {
-        // Simula la respuesta truncada del modelo local que solo devolvió del 18 al 12 y omitió 11 y 32
-        OdontogramaAiPort truncatedAiPort = messages -> """
+    @DisplayName("Debe soportar todos los nuevos estados clínicos y sus sinónimos con sus colores hexadecimales")
+    void debeSoportarNuevosEstadosClinicosYSinonimos() {
+        OdontogramaAiPort aiPort = messages -> """
                 {
                   "dientes": [
                     {
-                      "numero": 18,
-                      "estadoGeneral": "Caries",
+                      "numero": 12,
+                      "estadoGeneral": "Presente",
                       "caras": {
-                        "mesial": "Caries",
-                        "distal": "Sano",
-                        "vestibular": "Sano",
-                        "palatino_lingual": "Sano",
-                        "oclusal_incisal": "Caries"
+                        "vestibular": "Desgaste/Abfracción",
+                        "distal": "Rest. Defectuosa",
+                        "oclusal_incisal": "Obturación Temporal"
                       }
                     },
-                    {
-                      "numero": 17,
-                      "estadoGeneral": "Sano",
-                      "caras": {
-                        "mesial": "Sano",
-                        "distal": "Sano",
-                        "vestibular": "Sano",
-                        "palatino_lingual": "Sano",
-                        "oclusal_incisal": "Sano"
-                      }
-                    }
+                    { "numero": 13, "estadoGeneral": "Endodoncia" },
+                    { "numero": 14, "estadoGeneral": "Núcleo/Poste" },
+                    { "numero": 15, "estadoGeneral": "Corona" },
+                    { "numero": 16, "estadoGeneral": "Póntico" },
+                    { "numero": 17, "estadoGeneral": "Prótesis Removible" },
+                    { "numero": 26, "estadoGeneral": "Resto Radicular" },
+                    { "numero": 38, "estadoGeneral": "En Erupción" }
                   ]
                 }
                 """;
 
         ProcessVoiceDictationService service = new ProcessVoiceDictationService(
-                truncatedAiPort, promptBuilder, validator, mapper, objectMapper, 3
+                aiPort, promptBuilder, validator, mapper, objectMapper, 3
         );
 
-        VoiceCaptureRequest request = new VoiceCaptureRequest(
-                "odo-front-002",
-                "cliente 18 oclusal caries 17 distal caries 16 15 14 13 y 12 sanos 11 caries en mesial caries en 32 resto de dientes sano"
+        OdontogramaUpdateResponse response = service.procesarDictado(
+                new VoiceCaptureRequest("odo-nuevos-estados", "dictado con nuevos estados")
         );
 
-        OdontogramaUpdateResponse response = service.procesarDictado(request);
+        Map<Integer, DienteData> porNumero = indexarPorNumero(response);
 
-        assertEquals(9, response.dientes().size());
+        DienteData d12 = porNumero.get(12);
+        assertEquals(EstadoClinico.DESGASTE, d12.caras().vestibular().estado());
+        assertEquals("#FDBA74", d12.caras().vestibular().colorHex());
+        assertEquals(EstadoClinico.DEFECTUOSO, d12.caras().distal().estado());
+        assertEquals("#E11D48", d12.caras().distal().colorHex());
+        assertEquals(EstadoClinico.TEMPORAL, d12.caras().oclusalIncisal().estado());
+        assertEquals("#94A3B8", d12.caras().oclusalIncisal().colorHex());
 
-        // Diente 18: solo oclusal caries, resto sano, estadoGeneral Presente
-        DienteData d18 = response.dientes().get(0);
-        assertEquals(18, d18.numero());
-        assertEquals(EstadoClinico.PRESENTE, d18.estadoGeneral().estado());
-        assertEquals(EstadoClinico.CARIES, d18.caras().oclusalIncisal().estado());
-        assertEquals(EstadoClinico.SANO, d18.caras().mesial().estado());
+        assertEquals(EstadoClinico.ENDODONCIA, porNumero.get(13).estadoGeneral().estado());
+        assertEquals("#D946EF", porNumero.get(13).estadoGeneral().colorHex());
+        assertEquals(EstadoClinico.ENDODONCIA, porNumero.get(13).caras().oclusalIncisal().estado());
 
-        // Diente 17: distal caries, resto sano
-        DienteData d17 = response.dientes().get(1);
-        assertEquals(17, d17.numero());
-        assertEquals(EstadoClinico.PRESENTE, d17.estadoGeneral().estado());
-        assertEquals(EstadoClinico.CARIES, d17.caras().distal().estado());
-        assertEquals(EstadoClinico.SANO, d17.caras().oclusalIncisal().estado());
+        assertEquals(EstadoClinico.NUCLEO, porNumero.get(14).estadoGeneral().estado());
+        assertEquals("#8B5CF6", porNumero.get(14).estadoGeneral().colorHex());
 
-        // Dientes 16, 15, 14, 13, 12: sanos
-        for (int idx = 2; idx <= 6; idx++) {
-            DienteData sano = response.dientes().get(idx);
-            assertEquals(EstadoClinico.SANO, sano.estadoGeneral().estado());
-            assertEquals("#22C55E", sano.estadoGeneral().colorHex());
-        }
+        assertEquals(EstadoClinico.CORONA, porNumero.get(15).estadoGeneral().estado());
+        assertEquals("#EAB308", porNumero.get(15).estadoGeneral().colorHex());
+        assertEquals(EstadoClinico.CORONA, porNumero.get(15).caras().mesial().estado());
 
-        // Diente 11: caries en mesial, resto sano
-        DienteData d11 = response.dientes().get(7);
-        assertEquals(11, d11.numero());
-        assertEquals(EstadoClinico.PRESENTE, d11.estadoGeneral().estado());
-        assertEquals(EstadoClinico.CARIES, d11.caras().mesial().estado());
-        assertEquals("Incisal", d11.caras().oclusalIncisal().etiquetaVisual());
+        assertEquals(EstadoClinico.PONTICO, porNumero.get(16).estadoGeneral().estado());
+        assertEquals("#FBBF24", porNumero.get(16).estadoGeneral().colorHex());
 
-        // Diente 32: caries en 32 (Incisivo lateral inferior izquierdo: Lingual + Incisal)
-        DienteData d32 = response.dientes().get(8);
-        assertEquals(32, d32.numero());
-        assertEquals(EstadoClinico.CARIES, d32.estadoGeneral().estado());
-        assertEquals("Lingual", d32.caras().palatinoLingual().etiquetaVisual());
-        assertEquals("Incisal", d32.caras().oclusalIncisal().etiquetaVisual());
-        assertEquals(EstadoClinico.CARIES, d32.caras().oclusalIncisal().estado());
+        assertEquals(EstadoClinico.PROTESIS_REMOVIBLE, porNumero.get(17).estadoGeneral().estado());
+        assertEquals("#F472B6", porNumero.get(17).estadoGeneral().colorHex());
+
+        assertEquals(EstadoClinico.RESTO_RADICULAR, porNumero.get(26).estadoGeneral().estado());
+        assertEquals("#78716C", porNumero.get(26).estadoGeneral().colorHex());
+
+        assertEquals(EstadoClinico.EN_ERUPCION, porNumero.get(38).estadoGeneral().estado());
+        assertEquals("#84CC16", porNumero.get(38).estadoGeneral().colorHex());
     }
 
     @Test
-    @DisplayName("Debe soportar de forma genérica hasta los 32 dientes FDI con rangos y múltiples hallazgos por pieza")
-    void debeSoportarLos32DientesFdiConRangosYMultiplesHallazgos() {
-        OdontogramaAiPort partialAiPort = messages -> """
+    @DisplayName("Debe mantener las 5 caras en Sano cuando el diente tiene una lesión exclusiva de la raíz (ej. Fractura Radicular, Lesión Periapical)")
+    void debeMantenerCarasEnSanoCuandoEsLesionExclusivaDeRaiz() {
+        OdontogramaAiPort aiPort = messages -> """
                 {
                   "dientes": [
-                    { "numero": 48, "estadoGeneral": "Ausente" }
+                    { "numero": 21, "estadoGeneral": "Fractura Radicular" },
+                    { "numero": 22, "estadoGeneral": "Lesión Periapical" },
+                    { "numero": 23, "estadoGeneral": "Apicectomía" },
+                    { "numero": 36, "estadoGeneral": "Lesión de Furca" },
+                    { "numero": 46, "estadoGeneral": "Reabsorción Radicular" },
+                    { "numero": 18, "estadoGeneral": "Anomalía Radicular" }
                   ]
                 }
                 """;
 
         ProcessVoiceDictationService service = new ProcessVoiceDictationService(
-                partialAiPort, promptBuilder, validator, mapper, objectMapper, 3
+                aiPort, promptBuilder, validator, mapper, objectMapper, 3
         );
 
-        VoiceCaptureRequest request = new VoiceCaptureRequest(
-                "odo-32-full",
-                "diente 11 incisal fracturado y mesial caries, del 12 al 18 sanos, del 21 al 28 sanos, del 31 al 38 sanos, del 41 al 47 sanos, diente 48 ausente"
+        OdontogramaUpdateResponse response = service.procesarDictado(
+                new VoiceCaptureRequest("odo-raiz", "dictado con lesiones radiculares")
         );
 
-        OdontogramaUpdateResponse response = service.procesarDictado(request);
+        Map<Integer, DienteData> porNumero = indexarPorNumero(response);
 
-        assertEquals(32, response.dientes().size());
-        assertEquals(11, response.dientes().get(0).numero());
-        assertEquals(EstadoClinico.FRACTURADO, response.dientes().get(0).caras().oclusalIncisal().estado());
-        assertEquals(EstadoClinico.CARIES, response.dientes().get(0).caras().mesial().estado());
-        assertEquals(48, response.dientes().get(31).numero());
-        assertEquals(EstadoClinico.AUSENTE, response.dientes().get(31).estadoGeneral().estado());
+        DienteData d21 = porNumero.get(21);
+        assertEquals(EstadoClinico.FRACTURA_RADICULAR, d21.estadoGeneral().estado());
+        assertEquals("#B91C1C", d21.estadoGeneral().colorHex());
+        assertEquals(EstadoClinico.SANO, d21.caras().mesial().estado());
+        assertEquals(EstadoClinico.SANO, d21.caras().oclusalIncisal().estado());
+
+        assertEquals(EstadoClinico.LESION_PERIAPICAL, porNumero.get(22).estadoGeneral().estado());
+        assertEquals(EstadoClinico.SANO, porNumero.get(22).caras().vestibular().estado());
+
+        assertEquals(EstadoClinico.APICECTOMIA, porNumero.get(23).estadoGeneral().estado());
+        assertEquals(EstadoClinico.LESION_FURCA, porNumero.get(36).estadoGeneral().estado());
+        assertEquals(EstadoClinico.REABSORCION_RADICULAR, porNumero.get(46).estadoGeneral().estado());
+        assertEquals(EstadoClinico.ANOMALIA_RADICULAR, porNumero.get(18).estadoGeneral().estado());
+    }
+
+    private Map<Integer, DienteData> indexarPorNumero(OdontogramaUpdateResponse response) {
+        return response.dientes().stream()
+                .collect(Collectors.toMap(DienteData::numero, Function.identity()));
     }
 }
