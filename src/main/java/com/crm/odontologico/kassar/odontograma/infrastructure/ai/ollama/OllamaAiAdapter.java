@@ -89,13 +89,18 @@ public class OllamaAiAdapter implements OdontogramaAiPort {
 
             throw new AiProviderCommunicationException(
                     "La respuesta de Ollama no contiene el campo 'message.content' ni 'response'.");
+        } catch (AiProviderCommunicationException ex) {
+            log.error("Falló la llamada a Ollama (modelo '{}').", properties.model(), ex);
+            throw ex;
         } catch (JacksonException ex) {
+            log.error("Ollama devolvió una respuesta JSON inválida (modelo '{}').", properties.model(), ex);
             throw new AiProviderCommunicationException(
                     "Respuesta JSON inválida desde el servidor Ollama en " + properties.baseUrl()
                             + properties.chatEndpoint() + " (modelo: " + properties.model() + "): " + ex.getOriginalMessage(),
                     ex
             );
         } catch (RestClientException ex) {
+            log.error("Error comunicándose con Ollama (modelo '{}').", properties.model(), ex);
             throw new AiProviderCommunicationException(
                     "Error al comunicarse con el servidor de IA Ollama en " + properties.baseUrl()
                             + properties.chatEndpoint() + " (modelo: " + properties.model() + "): " + ex.getMessage(),

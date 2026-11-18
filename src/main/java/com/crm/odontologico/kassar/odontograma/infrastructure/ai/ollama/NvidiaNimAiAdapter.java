@@ -17,6 +17,8 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.util.List;
 
 /**
@@ -50,11 +52,10 @@ public class NvidiaNimAiAdapter implements OdontogramaAiPort {
 
     @Override
     public String generarRespuestaJson(List<AiChatMessage> messages) {
-        validarApiKeyConfigurada();
-
-        NvidiaChatRequest requestPayload = construirPayload(messages);
-
         try {
+            validarApiKeyConfigurada();
+
+            NvidiaChatRequest requestPayload = construirPayload(messages);
             log.debug("Enviando petición a NVIDIA NIM ({}{}) con modelo '{}' y {} mensaje(s)",
                     properties.baseUrl(), properties.chatEndpoint(), properties.model(), messages.size());
 
@@ -62,8 +63,12 @@ public class NvidiaNimAiAdapter implements OdontogramaAiPort {
             return extraerContenidoDeRespuesta(rawBody);
 
         } catch (AiProviderCommunicationException ex) {
+            log.error("Falló la llamada a NVIDIA NIM (modelo '{}').\n{}",
+                    properties.model(), trazaSegura(ex));
             throw ex;
         } catch (JacksonException ex) {
+            log.error("NVIDIA NIM devolvió una respuesta JSON inválida (modelo '{}').\n{}",
+                    properties.model(), trazaSegura(ex));
             throw new AiProviderCommunicationException(
                     "Respuesta JSON inválida desde NVIDIA NIM (modelo: " + properties.model() + "): "
                             + redactarClave(ex.getOriginalMessage()),
@@ -71,7 +76,8 @@ public class NvidiaNimAiAdapter implements OdontogramaAiPort {
             );
         } catch (RestClientException ex) {
             String safeMsg = redactarClave(ex.getMessage());
-            log.error("Error comunicándose con NVIDIA NIM (modelo '{}'): {}", properties.model(), safeMsg);
+            log.error("Error comunicándose con NVIDIA NIM (modelo '{}'): {}",
+                    properties.model(), safeMsg + "\n" + trazaSegura(ex));
             throw new AiProviderCommunicationException(
                     "Error al comunicarse con la API de NVIDIA NIM (modelo: " + properties.model() + "): " + safeMsg,
                     ex
@@ -150,6 +156,12 @@ public class NvidiaNimAiAdapter implements OdontogramaAiPort {
             return mensaje;
         }
         return mensaje.replace(key, "[REDACTED]");
+    }
+
+    private String trazaSegura(Throwable exception) {
+        StringWriter trace = new StringWriter();
+        exception.printStackTrace(new PrintWriter(trace));
+        return redactarClave(trace.toString());
     }
 
     public record NvidiaChatRequest(

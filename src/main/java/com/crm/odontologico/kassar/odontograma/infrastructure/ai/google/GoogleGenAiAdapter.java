@@ -16,6 +16,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.util.List;
 import java.util.regex.Pattern;
 
@@ -57,13 +59,22 @@ public class GoogleGenAiAdapter implements OdontogramaAiPort {
             }
             return response.getResult().getOutput().getText();
         } catch (AiProviderCommunicationException ex) {
+            log.error("Falló la llamada a Google AI Studio (modelo Gemini).\n{}",
+                    sanitizedStackTrace(ex));
             throw ex;
         } catch (RuntimeException ex) {
             String safeMessage = redactSensitiveData(ex.getMessage());
-            log.error("Falló la llamada a Google AI Studio. Causas: {}", summarizeCauses(ex));
+            log.error("Falló la llamada a Google AI Studio. Causas: {}",
+                    summarizeCauses(ex) + "\n" + sanitizedStackTrace(ex));
             throw new AiProviderCommunicationException(
                     "Error al comunicarse con Google AI Studio (Gemini): " + safeMessage, ex);
         }
+    }
+
+    private String sanitizedStackTrace(Throwable exception) {
+        StringWriter trace = new StringWriter();
+        exception.printStackTrace(new PrintWriter(trace));
+        return redactSensitiveData(trace.toString());
     }
 
     private String summarizeCauses(Throwable exception) {
